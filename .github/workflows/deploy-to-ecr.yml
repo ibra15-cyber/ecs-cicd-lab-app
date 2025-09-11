@@ -47,10 +47,6 @@ jobs:
           
           # Build and push only latest tag
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          
-          echo "Local Docker images:"
-          docker images | grep $ECR_REPOSITORY
-          
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Generate Deployment Artifacts
@@ -70,12 +66,6 @@ jobs:
                   LoadBalancerInfo:
                     ContainerName: "java-full-stack-Container"
                     ContainerPort: 8080
-          Hooks:
-            - BeforeInstall: "ValidateService"
-            - AfterInstall: "AfterInstallHook"
-            - AfterAllowTestTraffic: "AfterAllowTestTraffic"
-            - BeforeAllowTraffic: "BeforeAllowTraffic"
-            - AfterAllowTraffic: "AfterAllowTraffic"
           EOF
 
           # Create taskdef.json
@@ -119,13 +109,17 @@ jobs:
           }
           EOF
 
-          echo "Generated appspec.yml:"
-          cat appspec.yml
-          echo ""
-          echo "Generated taskdef.json:"
-          cat taskdef.json
+          # Create the ZIP file that CodeDeploy expects
+          zip -r deployment-artifacts.zip appspec.yml taskdef.json
+
+          echo "Generated deployment-artifacts.zip contents:"
+          unzip -l deployment-artifacts.zip
 
       - name: Upload Deployment Artifacts to S3
         run: |
+          # Upload the ZIP file to S3
+          aws s3 cp deployment-artifacts.zip s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/latest.zip
+          
+          # Also upload individual files for reference
           aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
           aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
