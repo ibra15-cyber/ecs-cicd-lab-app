@@ -47,6 +47,10 @@ jobs:
           
           # Build and push only latest tag
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          
+          echo "Local Docker images:"
+          docker images | grep $ECR_REPOSITORY
+          
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Generate Deployment Artifacts
@@ -55,20 +59,26 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           AWS_REGION: eu-west-1
         run: |
-          # Create appspec.yml TEMPLATE with PLACEHOLDERS
+          # Create appspec.yml
           cat > appspec.yml << EOF
           version: 0.0
           Resources:
             - TargetService:
                 Type: AWS::ECS::Service
                 Properties:
-                  TaskDefinition: "<TASK_DEFINITION>"
+                  TaskDefinition: <TASK_DEFINITION>
                   LoadBalancerInfo:
                     ContainerName: "java-full-stack-Container"
                     ContainerPort: 8080
+          Hooks:
+            - BeforeInstall: "ValidateService"
+            - AfterInstall: "AfterInstallHook"
+            - AfterAllowTestTraffic: "AfterAllowTestTraffic"
+            - BeforeAllowTraffic: "BeforeAllowTraffic"
+            - AfterAllowTraffic: "AfterAllowTraffic"
           EOF
-          
-          # Create taskdef.json TEMPLATE with PLACEHOLDERS
+
+          # Create taskdef.json
           cat > taskdef.json << EOF
           {
             "family": "java-full-stack-Task",
@@ -76,12 +86,12 @@ jobs:
             "requiresCompatibilities": ["FARGATE"],
             "cpu": "256",
             "memory": "512",
-            "executionRoleArn": "<TASK_EXECUTION_ROLE_ARN>",
-            "taskRoleArn": "<TASK_ROLE_ARN>",
+            "executionRoleArn": "${{ secrets.TASK_EXECUTION_ROLE_ARN }}",
+            "taskRoleArn": "${{ secrets.TASK_ROLE_ARN }}",
             "containerDefinitions": [
               {
                 "name": "java-full-stack-Container",
-                "image": "<IMAGE1_NAME>",
+                "image": "$ECR_REGISTRY/$ECR_REPOSITORY:latest",
                 "essential": true,
                 "portMappings": [
                   {
@@ -100,7 +110,7 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/java-full-stack",
-                    "awslogs-region": "<AWS_REGION>",
+                    "awslogs-region": "$AWS_REGION",
                     "awslogs-stream-prefix": "ecs"
                   }
                 }
@@ -109,32 +119,13 @@ jobs:
           }
           EOF
 
-          # Create the ZIP file that CodeDeploy expects
-          zip -r deployment-artifacts.zip appspec.yml taskdef.json
-
-          echo "Generated deployment-artifacts.zip contents:"
-          unzip -l deployment-artifacts.zip
-          
-          echo "=== TEMPLATE CONTENTS ==="
-          echo "appspec.yml:"
+          echo "Generated appspec.yml:"
           cat appspec.yml
           echo ""
-          echo "taskdef.json:"
+          echo "Generated taskdef.json:"
           cat taskdef.json
 
       - name: Upload Deployment Artifacts to S3
         run: |
-          # Upload the ZIP file to S3
-          aws s3 cp deployment-artifacts.zip s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/latest.zip
-          
-          # Also upload individual files for reference
           aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
           aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
-          
-          echo "Uploaded template artifacts to S3"
-
-      - name: Trigger CodePipeline Execution
-        run: |
-          # Manually start the pipeline after uploading artifacts
-          aws codepipeline start-pipeline-execution --name java-full-stack-Pipeline
-          echo "Pipeline execution triggered"
