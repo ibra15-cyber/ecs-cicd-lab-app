@@ -123,3 +123,9 @@ jobs:
           # Also upload individual files for reference
           aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
           aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
+
+      - name: Trigger CodePipeline Execution
+        run: |
+          # Manually start the pipeline after uploading artifacts
+          aws codepipeline start-pipeline-execution --name java-full-stack-Pipeline
+          echo "Pipeline execution triggered"
