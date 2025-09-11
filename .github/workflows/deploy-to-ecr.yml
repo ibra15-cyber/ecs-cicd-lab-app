@@ -47,10 +47,6 @@ jobs:
           
           # Build and push only latest tag
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          
-          echo "Local Docker images:"
-          docker images | grep $ECR_REPOSITORY
-          
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Generate Deployment Artifacts
@@ -59,23 +55,21 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           AWS_REGION: eu-west-1
         run: |
-          # Create appspec.yml
+          # Get the actual task definition ARN
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          TASK_DEF_ARN="arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:task-definition/java-full-stack-Task"
+          
+          # Create appspec.yml with REAL ARN
           cat > appspec.yml << EOF
           version: 0.0
           Resources:
             - TargetService:
                 Type: AWS::ECS::Service
                 Properties:
-                  TaskDefinition: <TASK_DEFINITION>
+                  TaskDefinition: "$TASK_DEF_ARN"
                   LoadBalancerInfo:
                     ContainerName: "java-full-stack-Container"
                     ContainerPort: 8080
-          Hooks:
-            - BeforeInstall: "ValidateService"
-            - AfterInstall: "AfterInstallHook"
-            - AfterAllowTestTraffic: "AfterAllowTestTraffic"
-            - BeforeAllowTraffic: "BeforeAllowTraffic"
-            - AfterAllowTraffic: "AfterAllowTraffic"
           EOF
 
           # Create taskdef.json
@@ -119,13 +113,23 @@ jobs:
           }
           EOF
 
-          echo "Generated appspec.yml:"
-          cat appspec.yml
-          echo ""
-          echo "Generated taskdef.json:"
-          cat taskdef.json
+          # Create the ZIP file that CodeDeploy expects
+          zip -r deployment-artifacts.zip appspec.yml taskdef.json
+
+          echo "Generated deployment-artifacts.zip contents:"
+          unzip -l deployment-artifacts.zip
 
       - name: Upload Deployment Artifacts to S3
         run: |
+          # Upload the ZIP file to S3
+          aws s3 cp deployment-artifacts.zip s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/latest.zip
+          
+          # Also upload individual files for reference
           aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
           aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
+
+      - name: Trigger CodePipeline Execution
+        run: |
+          # Manually start the pipeline after uploading artifacts
+          aws codepipeline start-pipeline-execution --name java-full-stack-Pipeline
+          echo "Pipeline execution triggered"
