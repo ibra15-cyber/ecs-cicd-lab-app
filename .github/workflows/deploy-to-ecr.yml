@@ -1,4 +1,4 @@
-name: Build and Push to ECR
+name: Build, Push to ECR and Generate Deployment Artifacts
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  build-and-push:
+  build-push-and-generate-artifacts:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,21 +41,91 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          
           echo "ECR Registry: $ECR_REGISTRY"
           echo "ECR Repository: $ECR_REPOSITORY" 
-          echo "Image Tag: $IMAGE_TAG"
-          echo "Full image name will be: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          # Build and push only latest tag
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
           
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          
-           # Debug: List local Docker images to verify tags
           echo "Local Docker images:"
           docker images | grep $ECR_REPOSITORY
           
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Generate Deployment Artifacts
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          AWS_REGION: eu-west-1
+        run: |
+          # Create appspec.yml
+          cat > appspec.yml << EOF
+          version: 0.0
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: <TASK_DEFINITION>
+                  LoadBalancerInfo:
+                    ContainerName: "java-full-stack-Container"
+                    ContainerPort: 8080
+          Hooks:
+            - BeforeInstall: "ValidateService"
+            - AfterInstall: "AfterInstallHook"
+            - AfterAllowTestTraffic: "AfterAllowTestTraffic"
+            - BeforeAllowTraffic: "BeforeAllowTraffic"
+            - AfterAllowTraffic: "AfterAllowTraffic"
+          EOF
+
+          # Create taskdef.json
+          cat > taskdef.json << EOF
+          {
+            "family": "java-full-stack-Task",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "256",
+            "memory": "512",
+            "executionRoleArn": "${{ secrets.TASK_EXECUTION_ROLE_ARN }}",
+            "taskRoleArn": "${{ secrets.TASK_ROLE_ARN }}",
+            "containerDefinitions": [
+              {
+                "name": "java-full-stack-Container",
+                "image": "$ECR_REGISTRY/$ECR_REPOSITORY:latest",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 8080,
+                    "protocol": "tcp"
+                  }
+                ],
+                "healthCheck": {
+                  "command": ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"],
+                  "interval": 30,
+                  "timeout": 5,
+                  "retries": 3,
+                  "startPeriod": 60
+                },
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/java-full-stack",
+                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+
+          echo "Generated appspec.yml:"
+          cat appspec.yml
+          echo ""
+          echo "Generated taskdef.json:"
+          cat taskdef.json
+
+      - name: Upload Deployment Artifacts to S3
+        run: |
+          aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
+          aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
