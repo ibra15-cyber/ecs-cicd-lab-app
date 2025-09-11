@@ -55,19 +55,23 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           AWS_REGION: eu-west-1
         run: |
-          # Create appspec.yml
+          # Get the actual task definition ARN
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          TASK_DEF_ARN="arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:task-definition/java-full-stack-Task"
+          
+          # Create appspec.yml with REAL ARN
           cat > appspec.yml << EOF
           version: 0.0
           Resources:
             - TargetService:
                 Type: AWS::ECS::Service
                 Properties:
-                  TaskDefinition: <TASK_DEFINITION>
+                  TaskDefinition: "$TASK_DEF_ARN"
                   LoadBalancerInfo:
                     ContainerName: "java-full-stack-Container"
                     ContainerPort: 8080
           EOF
-
+          
           # Create taskdef.json
           cat > taskdef.json << EOF
           {
