@@ -55,24 +55,20 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           AWS_REGION: eu-west-1
         run: |
-          # Get the actual task definition ARN
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          TASK_DEF_ARN="arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:task-definition/java-full-stack-Task"
-          
-          # Create appspec.yml with REAL ARN
+          # Create appspec.yml TEMPLATE with PLACEHOLDERS
           cat > appspec.yml << EOF
           version: 0.0
           Resources:
             - TargetService:
                 Type: AWS::ECS::Service
                 Properties:
-                  TaskDefinition: "$TASK_DEF_ARN"
+                  TaskDefinition: "<TASK_DEFINITION>"
                   LoadBalancerInfo:
                     ContainerName: "java-full-stack-Container"
                     ContainerPort: 8080
           EOF
           
-          # Create taskdef.json
+          # Create taskdef.json TEMPLATE with PLACEHOLDERS
           cat > taskdef.json << EOF
           {
             "family": "java-full-stack-Task",
@@ -80,12 +76,12 @@ jobs:
             "requiresCompatibilities": ["FARGATE"],
             "cpu": "256",
             "memory": "512",
-            "executionRoleArn": "${{ secrets.TASK_EXECUTION_ROLE_ARN }}",
-            "taskRoleArn": "${{ secrets.TASK_ROLE_ARN }}",
+            "executionRoleArn": "<TASK_EXECUTION_ROLE_ARN>",
+            "taskRoleArn": "<TASK_ROLE_ARN>",
             "containerDefinitions": [
               {
                 "name": "java-full-stack-Container",
-                "image": "$ECR_REGISTRY/$ECR_REPOSITORY:latest",
+                "image": "<IMAGE1_NAME>",
                 "essential": true,
                 "portMappings": [
                   {
@@ -104,7 +100,7 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/java-full-stack",
-                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-region": "<AWS_REGION>",
                     "awslogs-stream-prefix": "ecs"
                   }
                 }
@@ -118,6 +114,13 @@ jobs:
 
           echo "Generated deployment-artifacts.zip contents:"
           unzip -l deployment-artifacts.zip
+          
+          echo "=== TEMPLATE CONTENTS ==="
+          echo "appspec.yml:"
+          cat appspec.yml
+          echo ""
+          echo "taskdef.json:"
+          cat taskdef.json
 
       - name: Upload Deployment Artifacts to S3
         run: |
@@ -127,6 +130,8 @@ jobs:
           # Also upload individual files for reference
           aws s3 cp appspec.yml s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
           aws s3 cp taskdef.json s3://${{ secrets.ARTIFACT_BUCKET }}/deployment-artifacts/
+          
+          echo "Uploaded template artifacts to S3"
 
       - name: Trigger CodePipeline Execution
         run: |
